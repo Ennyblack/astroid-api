@@ -98,7 +98,7 @@ import { RedisThrottlerStorage } from './common/throttler/redis-throttler.storag
       inject: [ConfigService, REDIS_CLIENT],
       useFactory: (config: ConfigService, redis: Redis) =>
         createThrottlerOptions(
-          config.getOrThrow<ThrottlerConfig>('throttler'),
+          config.get<ThrottlerConfig>('throttler') ?? { ttl: 60, limit: 10 },
           new RedisThrottlerStorage(redis),
         ),
     }),
