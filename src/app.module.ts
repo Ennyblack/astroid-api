@@ -87,20 +87,12 @@ import { RedisThrottlerStorage } from './common/throttler/redis-throttler.storag
             : { target: 'pino-pretty', options: { singleLine: true } },
       },
     }),
-    // Two rate-limit tiers, both driven by THROTTLE_* env vars (see
-    // config/throttler.config.ts). Every route is subject to both named
-    // throttlers, but AstroidThrottlerGuard enforces only the one matching the
-    // route's @ThrottleTierDecorator tier ('api' default, 'auth' for the
-    // sensitive auth endpoints). Counters live in Redis so every replica behind
-    // the load balancer enforces the same budget.
     ThrottlerModule.forRootAsync({
-      imports: [LocksModule],
       inject: [ConfigService, REDIS_CLIENT],
-      useFactory: (config: ConfigService, redis: Redis) =>
-        createThrottlerOptions(
-          config.getOrThrow<ThrottlerConfig>('throttler'),
-          new RedisThrottlerStorage(redis),
-        ),
+      useFactory: (config: ConfigService, redis: Redis) => ({
+        ...createThrottlerOptions(config.getOrThrow<ThrottlerConfig>('throttler')),
+        storage: new RedisThrottlerStorage(redis),
+      }),
     }),
 
     DatabaseModule,

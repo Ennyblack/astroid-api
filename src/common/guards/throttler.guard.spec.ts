@@ -157,6 +157,39 @@ describe('AstroidThrottlerGuard', () => {
   });
 
   describe('allowed responses', () => {
+    it('blocks excess traffic and returns standard rate limit behavior when limit exceeded', async () => {
+      const increment = vi.fn().mockResolvedValue(BLOCKED);
+      const reflector = {
+        getAllAndOverride: vi.fn().mockReturnValue(undefined),
+      };
+      const guard = new AstroidThrottlerGuard(
+        createThrottlerOptions(CONFIG),
+        { increment } as never,
+        reflector as never,
+      );
+      await guard.onModuleInit();
+
+      const response: MockResponse = { header: vi.fn() };
+      const context = buildContext({ ip: '203.0.113.7', headers: {} }, response);
+      const { getTracker, generateKey } = (
+        guard as unknown as {
+          commonOptions: Pick<ThrottlerRequest, 'getTracker' | 'generateKey'>;
+        }
+      ).commonOptions;
+
+      await expect(
+        guard['handleRequest']({
+          context,
+          limit: 10,
+          ttl: 60_000,
+          throttler: throttlerNamed('api'),
+          blockDuration: 60_000,
+          getTracker,
+          generateKey,
+        } as ThrottlerRequest),
+      ).resolves.toBe(false);
+    });
+
     it('emits the standard X-RateLimit headers', async () => {
       const { response, call } = await prepare();
 
