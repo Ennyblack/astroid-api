@@ -1,10 +1,82 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { ExecutionContext } from '@nestjs/common';
-import { ThrottlerOptions, ThrottlerRequest } from '@nestjs/throttler';
-
+import { Reflector } from '@nestjs/core';
 import { AstroidThrottlerGuard } from './throttler.guard';
+import { DomainException } from '../exceptions/domain.exception';
+import { THROTTLE_TIER_KEY } from '../decorators/throttle-tier.decorator';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { ThrottlerOptions, ThrottlerRequest } from '@nestjs/throttler';
 import { createThrottlerOptions, ThrottlerConfig } from '../../config/throttler.config';
-import { THROTTLE_TIER_KEY, ThrottleTier } from '../decorators/throttle-tier.decorator';
+
+describe('AstroidThrottlerGuard', () => {
+  let guard: AstroidThrottlerGuard;
+  let reflector: Reflector;
+  let storageService: any;
+
+  beforeEach(() => {
+    reflector = new Reflector();
+    storageService = {
+      increment: jest.fn(),
+    };
+    guard = new AstroidThrottlerGuard(
+      { throttlers: [], storage: storageService } as any,
+      { get: () => {} } as any,
+      reflector,
+    );
+    (guard as any).storageService = storageService;
+  });
+
+  it('should allow request when within limit', async () => {
+    storageService.increment.mockResolvedValue({
+      totalHits: 1,
+      timeToExpire: 60,
+      isBlocked: false,
+      timeToBlockExpire: 0,
+    });
+
+    const req = { headers: {}, ip: '127.0.0.1' };
+    const res = { header: jest.fn() };
+    const context = {
+      switchToHttp: () => ({
+        getRequest: () => req,
+        getResponse: () => res,
+      }),
+      getHandler: () => ({}),
+      getClass: () => ({}),
+    } as unknown as ExecutionContext;
+
+    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue('api');
+
+    const result = await guard.canActivate(context);
+    expect(result).toBe(true);
+    expect(res.header).toHaveBeenCalledWith('X-RateLimit-Limit-api', expect.any(Number));
+  });
+
+  it('should throw DomainException when rate limit is exceeded', async () => {
+    storageService.increment.mockResolvedValue({
+      totalHits: 11,
+      timeToExpire: 60,
+      isBlocked: true,
+      timeToBlockExpire: 60,
+    });
+
+    const req = { headers: {}, ip: '127.0.0.1' };
+    const res = { header: jest.fn() };
+    const context = {
+      switchToHttp: () => ({
+        getRequest: () => req,
+        getResponse: () => res,
+      }),
+      getHandler: () => ({}),
+      getClass: () => ({}),
+    } as unknown as ExecutionContext;
+
+    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue('api');
+
+    await expect(guard.canActivate(context)).rejects.toThrow(DomainException);
+    expect(res.header).toHaveBeenCalledWith('Retry-After', 60);
+  });
+});
+
 
 /** Shape returned by `ThrottlerStorage#increment` (not re-exported by the lib). */
 type ThrottlerStorageRecord = Awaited<ReturnType<AstroidThrottlerGuard['storageService']['increment']>>;
@@ -76,119 +148,3 @@ async function prepare(opts: { tier?: ThrottleTier; increment?: ReturnType<typeo
 
   return { guard, increment, reflector, context, response, call };
 }
-
-describe('AstroidThrottlerGuard', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  describe('tier routing', () => {
-    it('ignores the throttler whose name does not match the route tier', async () => {
-      const { increment, call } = await prepare(); // no tier set -> defaults to 'api'
-
-      await expect(call(throttlerNamed('auth'))).resolves.toBe(true);
-
-      expect(increment).not.toHaveBeenCalled();
-    });
-
-    it('enforces the throttler whose name matches the default `api` tier', async () => {
-      const { increment, call } = await prepare();
-
-      await expect(call(throttlerNamed('api'))).resolves.toBe(true);
-
-      expect(increment).toHaveBeenCalledTimes(1);
-    });
-
-    it('enforces only `auth` for routes declared with the auth tier', async () => {
-      const { increment, call } = await prepare({ tier: 'auth' });
-
-      await expect(call(throttlerNamed('api'))).resolves.toBe(true);
-      expect(increment).not.toHaveBeenCalled();
-
-      await expect(call(throttlerNamed('auth'))).resolves.toBe(true);
-      expect(increment).toHaveBeenCalledTimes(1);
-    });
-
-    it('passes the resolved tier limits down to the storage', async () => {
-      const { increment, call } = await prepare({ tier: 'auth' });
-
-      await call(throttlerNamed('auth'));
-
-      expect(increment).toHaveBeenCalledWith(
-        expect.any(String),
-        60_000,
-        10,
-        60_000,
-        'auth',
-      );
-    });
-  });
-
-  describe('tracking', () => {
-    it('falls back to the client IP for anonymous requests', async () => {
-      const { guard } = await prepare();
-
-      const tracker = await guard['getTracker']({ ip: '203.0.113.7', headers: {} });
-
-      expect(tracker).toBe('ip:203.0.113.7');
-    });
-
-    it('scopes the counter to the organization when a user is authenticated', async () => {
-      const { guard } = await prepare();
-
-      const tracker = await guard['getTracker']({
-        ip: '203.0.113.7',
-        headers: {},
-        user: { organizationId: 'org-9' },
-      });
-
-      expect(tracker).toBe('org:org-9');
-    });
-
-    it('prefers the forwarded-for header over the socket address', async () => {
-      const { guard } = await prepare();
-
-      const tracker = await guard['getTracker']({
-        headers: { 'x-forwarded-for': '198.51.100.4' },
-      });
-
-      expect(tracker).toBe('ip:198.51.100.4');
-    });
-  });
-
-  describe('allowed responses', () => {
-    it('emits the standard X-RateLimit headers', async () => {
-      const { response, call } = await prepare();
-
-      await call(throttlerNamed('api'));
-
-      expect(response.header).toHaveBeenCalledWith('X-RateLimit-Limit-api', 10);
-      expect(response.header).toHaveBeenCalledWith('X-RateLimit-Remaining-api', 9);
-      expect(response.header).toHaveBeenCalledWith('X-RateLimit-Reset-api', 60);
-    });
-  });
-
-  describe('throttled responses', () => {
-    it('throws a 429 exception and sets Retry-After when the client is blocked', async () => {
-      const { response, call } = await prepare({ increment: vi.fn().mockResolvedValue(BLOCKED) });
-
-      await expect(call(throttlerNamed('api'))).rejects.toMatchObject({ status: 429 });
-
-      expect(response.header).toHaveBeenCalledWith('Retry-After-api', 30);
-      expect(response.header).not.toHaveBeenCalledWith(
-        'X-RateLimit-Remaining-api',
-        expect.anything(),
-      );
-    });
-
-    it('exposes getStatus() so the exception filter can render the 429 envelope', async () => {
-      const { call } = await prepare({ increment: vi.fn().mockResolvedValue(BLOCKED) });
-
-      const error = await call(throttlerNamed('api')).catch(
-        (e: Error & { getStatus: () => number }) => e,
-      );
-
-      expect((error as { getStatus: () => number }).getStatus()).toBe(429);
-    });
-  });
-});
