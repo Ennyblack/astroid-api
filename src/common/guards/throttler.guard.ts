@@ -23,10 +23,10 @@ export class AstroidThrottlerGuard extends ThrottlerGuard {
 
     const response = context.switchToHttp().getResponse();
     const storageService = this.storageService;
-    const ttlMs = typeof ttl === 'function' ? ttl() : ttl;
-    const blockDurationMs = typeof blockDuration === 'function' ? blockDuration() : blockDuration;
+    const ttlValue = typeof ttl === 'function' ? ttl() : ttl;
+    const blockDurationValue = typeof blockDuration === 'function' ? blockDuration() : blockDuration;
 
-    const totalHits = await storageService.increment(key, ttlMs, limit, blockDurationMs, throttler.name);
+    const totalHits = await storageService.increment(key, ttlValue, limit, blockDurationValue, throttler.name);
     
     const timeToExpire = totalHits.timeToExpire;
     const remaining = Math.max(0, limit - totalHits.totalHits);
