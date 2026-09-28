@@ -2,6 +2,8 @@ import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { ConfigService } from '@nestjs/config';
+import { createThrottlerOptions } from './config/throttler.config';
 import { LoggerModule } from 'nestjs-pino';
 import { Redis } from 'ioredis';
 
@@ -107,6 +109,11 @@ import { RedisThrottlerStorage } from './common/throttler/redis-throttler.storag
     EventsModule,
     LocksModule,
     EncryptionModule,
+    ThrottlerModule.forRootAsync({
+      imports: [AppConfigModule],
+      inject: [ConfigService],
+      useFactory: createThrottlerOptions,
+    }),
 
     // Domain modules
     AuthModule,
